@@ -1,0 +1,168 @@
+#!/usr/bin/env python
+"""zoid is a twitter client written in Python to manage ZoidbergQuotes.
+It is easy to use, and fun. It's meant to handle "automated" accounts 
+easily.
+
+zoid requires tweepy (http://code.google.com/p/tweepy/)"""
+
+import os
+import sys
+import tweepy
+import json
+import random
+import datetime
+import time
+import hashlib
+import argparse
+
+DATA_DIR=os.path.join(os.getenv("HOME"), "Dropbox/zoid/data")
+WHOOPS=os.path.join(DATA_DIR, "whoops.txt")
+PHRASES=os.path.join(DATA_DIR, "phrases.txt")
+TWEETS=os.path.join(DATA_DIR, "tweets.txt")
+
+LAST_WHOOP=os.path.join(DATA_DIR, "lastwhoop.json")
+
+def get_auth(token_dir=DATA_DIR, 
+             key_filename="key.json",
+             auth_filename="auth.json"):
+    try:
+        keys=json.load(open(os.path.join(token_dir, key_filename)))
+    except IOError:
+        print "This seems to be your first time running zoid."
+        print "We'll need to get your Twitter API keys to use twitter."
+        key=raw_input("Please enter your Twitter API key: ")
+        cons_secret=raw_input("Please enter your Twitter API consumer secret: ")
+        keys={"key": key, 
+              "cons_secret": cons_secret}
+        json.dump(keys, open(os.path.join(token_dir, key_filename), 'w'))
+
+    # Get an auth connection to twitter
+    auth=tweepy.OAuthHandler(keys['key'], keys['cons_secret'])
+
+    try:
+        authdict=json.load(open(os.path.join(token_dir, auth_filename)))
+    except IOError:
+        print "zoid needs to obtain an access token from twitter."
+        print "Initiating connection to twitter."
+        redirect_url=auth.get_authorization_url()
+        print "Please go to the following URL and authorize zoid to access your account."
+        print redirect_url
+        verifier=raw_input("Please enter your verifier: ")
+        auth.get_access_token(verifier)
+        print "Connection successful!"
+        authdict={'key': auth.access_token.key,
+                  'secret': auth.access_token.secret}
+        json.dump(authdict, open(os.path.join(token_dir, auth_filename), 'w'))
+    
+    auth.set_access_token(authdict['key'], authdict['secret'])
+    return auth
+
+def get_api(auth):
+    return tweepy.API(auth)
+
+def read_phrase_file(phrase_file):
+    try:
+        phrases=[x.strip() for x in open(phrase_file, 'rU').readlines()]
+    except IOError:
+        phrases=[]
+    return phrases
+
+def whoop(api, 
+          whoop_file=WHOOPS, 
+          last_whoop=LAST_WHOOP, 
+          min_interval=1):
+    """The default minimum interval between whoops is 1 day."""
+    min_interval=datetime.timedelta(min_interval)
+    now=datetime.datetime.now()
+    try:
+        last_whoop_date=datetime.datetime.fromtimestamp(
+                        json.load(open(last_whoop)))
+    except IOError:
+        last_whoop_date=now-min_interval
+    
+    if now-last_whoop_date < min_interval:
+        print "You whooped recently. Please wait, or decrease the whooping interval."
+        return
+    my_whoop=random.choice(read_phrase_file(whoop_file))
+    try:
+        api.update_status(my_whoop)
+        json.dump(time.time(), open(last_whoop, 'w'))
+        print my_whoop
+    except tweepy.TweepError:
+        print "Couldn't update twitter status."
+    return
+
+def phrase(api,
+           phrase_file=PHRASES,
+           tweet_registry=TWEETS,
+           reset_registry=False):
+    """Tweets a random phrase from the phrase registry that hasn't been
+    tweeted before."""
+    phrases=read_phrase_file(phrase_file)
+    hasher=hashlib.md5
+    if reset_registry:
+        open(tweet_registry, 'w').close()
+    
+    already_tweeted=set(read_phrase_file(tweet_registry))
+    available_phrases=[x 
+                       for x in phrases
+                       if hasher(x).hexdigest() not in already_tweeted]
+    if len(available_phrases)==0:
+        print "There are no phrases left to tweet."
+        print "Erase the tweet registry and try again, or pass the -r flag."
+        return
+    selected_phrase=random.choice(available_phrases)
+    try:
+        api.update_status(selected_phrase)
+        open(tweet_registry, 'a').write("%s\n" %
+                                        hasher(selected_phrase).hexdigest())
+        print selected_phrase
+    except tweepy.TweepError:
+        print "Couldn't update status."
+    return
+    
+def exec_whoop(args):
+    whoop(args.api, min_interval=args.min_interval)
+    
+def exec_phrase(args):
+    phrase(args.api, reset_registry=args.reset_registry)
+    
+def build_parser(api_parameter):
+    parser = argparse.ArgumentParser(description=
+        'Tweet random phrases. Dr. John Zoidberg\'s tweet gland, if you will.')
+    parser.set_defaults(api=api_parameter)
+    subparsers=parser.add_subparsers()
+    
+    # Whoop
+    parser_whoop=subparsers.add_parser('whoop', 
+                    help="Tweet a random phrase (like 'Whoop whoop!') with "
+                         "a minimum time interval, i.e. you can't invoke "
+                         "it too often. Or, to be more precise, you can; "
+                         "it'll just ignore the call. Whoops may repeat.")
+    parser_whoop.add_argument('-t', '--interval', dest="min_interval",
+                              default=1, type=float, 
+                              help='Minimum number of days between whoops.'
+                              ' Can be fractional.')
+    parser_whoop.set_defaults(func=exec_whoop)
+    
+    # Random Phrases
+    parser_phrase=subparsers.add_parser('phrase',
+                     help="Tweet a random phrase from the phrase registry, "
+                          "sampling without repetition.")
+    parser_phrase.add_argument('-r', '--reset', type=bool, default=False,
+                               dest='reset_registry',
+                               help='Erase the tweet registry and start over.')
+    parser_phrase.set_defaults(func=exec_phrase)
+
+    return parser
+    
+def main():
+    authorization=get_auth()
+    api=get_api(authorization)
+    parser=build_parser(api)
+    args=parser.parse_args()
+    #print args
+    args.func(args)
+    
+if __name__=="__main__":
+    main()
