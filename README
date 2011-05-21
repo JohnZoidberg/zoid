@@ -1,0 +1,7 @@
+zoid is a command-line twitter client written in python to tweet random phrases that Dr. Zoidberg might say. 
+
+It requires tweepy and python 2.7.
+
+It requires a data directory; since I store it in my Dropbox account, that's the default ("~/Dropbox/zoid/data").
+
+It should work in Linux and Windows, but has only been tested on OS X.
